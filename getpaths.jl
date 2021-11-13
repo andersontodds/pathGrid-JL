@@ -45,8 +45,8 @@ function getpaths(startdate; stopdate=startdate, frames=144)
     pairlist = zeros(0,13)    # "strokelist", in MATLAB version
     for stID = 1:122
         #NOTE: MATLAB code below.  Need to find the columns in APpower in which stID exists, then find the APdata corresponding to those detections, and thereby compile subset of APdata that includes only strokes detected by current stID.
-        
-        #[row,col] = findall(stmat == stID)
+
+        stindex = findall(x -> x==stID, stmat)
         #lidx = sub2ind(size(APpower),row + 1, col)
         #APdata_stID = flrAPdata(col,:);
         #APpower_stID = flrAPpower(lidx);
@@ -93,3 +93,8 @@ stmat
 statfile = matopen("stations.mat")
 stations = read(statfile,"stations")
 close(statfile)
+
+
+
+stID = 11
+stindex = findall(x -> x==stID, stmat) # how to separate rows and columns in vector of CartesianIndex{2}?
