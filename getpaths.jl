@@ -69,27 +69,85 @@ function getpaths(startdate; stopdate=startdate, frames=144)
 
     end
 
-    return pairlist
+    #return pairlist
 
     # TODO 11/16/2021: get pairlist_lite_10m and file output working.
-    stroke_time = DateTime.(pairlist[:,1:6])
+
+    # collapse Nx6 time to Nx1 DateTime
+    stroke_time = (pairlist[:,1:6])
+    tcp = Year.(stroke_time[:,1]) + Month.(stroke_time[:,2]) + Day.(stroke_time[:,3]) +
+        + Hour.(stroke_time[:,4]) + Minute.(stroke_time[:,5]) +
+        + Nanosecond.(round.(Int,1e9*stroke_time[:,6]))
+    t = canonical.(tcp)
+    stroke_dt = DateTime.(t)
+    # could preserve microsecond accuracy by either keeping only Nx1 CompoundPeriods, or Nx2 Date,Time
+    #t_date = Date.(t)
+    #t_time = Time.(t)
+
     stroke_lat = pairlist[:,7]
     stroke_lon = pairlist[:,8]
     stat_lat = pairlist[:,12]
     stat_lon = pairlist[:,13]
-    pairlist_lite = cat(stroke_time, stroke_lat, stroke_lon, stat_lat, stat_lon, dims=2)
+    pairlist_lite = cat(stroke_dt, stroke_lat, stroke_lon, stat_lat, stat_lon, dims=2)
+
 
     bin_edges_10min = datestart:Minute(10):datestop
 
-    for t = 1:size(bin_edges_10min,1)
-        pairlist_lite_10m =
+    for bin in bin_edges_10min[1:end-1]
+
+        index_10m = findall(x-> (x >= bin) & (x <= bin+Minute(10)), timecol)
+        pairlist_lite_10m = pairlist_lite[index_10m, :]
+        save_df = Dates.format(bin, "yyyymmddHHMM")
+        savename = @sprintf("pairlist_lite_10m_%s.jld2", save_df)
+        jldsave(savename, pairlist=pairlist_lite_10m)
+        mv(savename, @sprintf("test/%s",savename)) # move data file to data/ directory
 
     end
+
+    return pairlist_lite
 
 end
 
 ## scratch
 
+# test function
+# NOTE 11/17: need to profile smaller parts of function.  In current form, getpaths(20170906) does not finish in ~10 minutes.
+pl_test = getpaths(20170906)
+
+# profiling
+@benchmark begin
+    pairlist = zeros(0,13);
+    for stID = 1:122
+        stindex = Tuple.(findall(x -> x==stID, stmat)) # defaults to CartesianIndex without Tuple.()
+        foundrows = first.(stindex)
+        foundcols = last.(stindex)
+
+        APdata_stID = APdata[foundcols,:]
+
+        st_lat = stations[stID, 1]
+        st_lon = stations[stID, 2]
+
+        strokecount_stID = size(foundcols, 1)
+        strokelist_stID = cat(APdata_stID, stID*ones(strokecount_stID,1), st_lat*ones(strokecount_stID,1), st_lon*ones(strokecount_stID,1); dims=2)
+
+        pairlist = cat(pairlist, strokelist_stID; dims=1)
+
+    end
+end
+# @benchmark result:
+  # memory estimate:  29.02 GiB
+  # allocs estimate:  16253
+  # --------------
+  # minimum time:     33.025 s (10.85% GC)
+  # median time:      33.025 s (10.85% GC)
+  # mean time:        33.025 s (10.85% GC)
+  # maximum time:     33.025 s (10.85% GC)
+  # --------------
+  # samples:          1
+  # evals/sample:     1
+
+
+##
 using Plots
 
 APdata = getpaths(20170906)
@@ -169,12 +227,22 @@ out_len/in_len
 # DateTime only supports millisecond precision.  Can either
 #   a) round stroke_time to nearest millisecond,
 #   b) split stroke_time into Date (YYYYMMDD) and Time (hh:mm:ss.)
-stroke_date = DateTime.(pairlist[:,1:6])
+stroke_time = (pairlist[:,1:6])
+tcp = Year.(stroke_time[:,1]) + Month.(stroke_time[:,2]) + Day.(stroke_time[:,3]) +
+    + Hour.(stroke_time[:,4]) + Minute.(stroke_time[:,5]) +
+    + Nanosecond.(round.(Int,1e9*stroke_time[:,6]))
+
+t = canonical.(tcp)
+
+stroke_dt = DateTime.(t)
+t_date = Date.(t)
+t_time = Time.(t)
+
 stroke_lat = pairlist[:,7]
 stroke_lon = pairlist[:,8]
 stat_lat = pairlist[:,12]
 stat_lon = pairlist[:,13]
-pairlist_lite = cat(stroke_time, stroke_lat, stroke_lon, stat_lat, stat_lon, dims=2)
+pairlist_lite = cat(stroke_dt, stroke_lat, stroke_lon, stat_lat, stat_lon, dims=2)
 
 times = pairlist
 
@@ -221,3 +289,134 @@ stime = Time(hours, minutes, seconds, millis, micros)
 date_vector = [[2017 09 06], [2017 09 07], [2017 09 08]]
 
 sdate = Date.(date_vector)
+
+fracseconds = times[1, 6]
+
+datestr = @sprintf("%f %f %f %f %f %.3f", years, months, days, hours, minutes, fracseconds)
+
+## @bernhard solution
+
+using Dates
+dfmt = DateFormat("yyyy mm dd HH MM SS.s")
+DateTime("2017 09 06 00 00 04.911",dfmt) #works for me
+DateTime("2017 09 06 00 00 04.911360",dfmt) #fails
+
+#How about this:
+using Dates
+times=["2017 09 06 00 00 04.911360","2017 09 06 04 15 55.193727"]
+dfmt = DateFormat("yyyy mm dd HH MM SS")
+times_wo_mus = map(x->x[1:findfirst(".",x)[1]-1],times)
+times_mus = map(x->x[findfirst(".",x)[1]+1:end],times)
+
+#Parse DateTime (second precision only)
+dt = DateTime.(times_wo_mus,dfmt)
+sdate = Date.(dt)
+stime = Time.(dt)
+
+#add Microseconds
+mus = Microsecond.(parse.(Int,times_mus))
+stime .= stime .+ mus
+
+## @rafael.guerra solution
+
+using Dates, CompoundPeriods
+
+T = [   2017 09 06 00 00 04.911360;
+        2017 09 06 04 15 55.193727;
+        2017 09 06 22 55 12.256655]
+
+tcp = Year.(T[:,1]) + Month.(T[:,2]) + Day.(T[:,3]) + Hour.(T[:,4]) +
+      + Minute.(T[:,5]) + Nanosecond.(round.(Int,1e9*T[:,6]))
+
+t = canonical.(tcp)
+
+t_dt = DateTime.(t)
+t_date = Date.(t)
+t_time = Time.(t)
+
+## combine/solve
+
+times = [   2017 09 06 00 00 04.911360;
+            2017 09 06 04 15 55.193727;
+            2017 09 06 22 55 12.256655]
+
+years   = times[:,1]
+months  = times[:,2]
+days    = times[:,3]
+hours   = times[:,4]
+minutes = times[:,5]
+seconds = times[:,6]
+
+dfmt = DateFormat("yyyy mm dd HH MM SS.s")
+
+timestring = fill("",size(times, 1),1)
+
+for i = 1:size(times, 1)
+
+    timestring[i] = @sprintf("%.0f %02.0f %02.0f %02.0f %02.0f %06.3f", years[i], months[i], days[i], hours[i], minutes[i], seconds[i])
+
+end
+
+dt = DateTime.(timestring,dfmt)
+
+## bin into 10-minute files
+
+dt_start = DateTime(2017,09,06,00,00,00)
+dt_stop = DateTime(2017,09,07,00,00,00)
+bin_edges_10min = dt_start:Minute(10):dt_stop
+
+bin_edges_10min[2]
+
+bin = bin_edges_10min[2]-Minute(10)
+timecol = @view pairlist_lite[:,1]
+size(pairlist_lite)
+index_10m = findall(x-> (x >= bin) & (x < bin+Minute(10)), timecol)
+timecol[index_10m[end]]
+pairlist_10m_test = pairlist_lite[index_10m, :]
+
+using Plots
+plotly()
+plot(1:1:length(index_10m),index_10m)
+
+A = [1 2 3 4;
+     5 6 7 8;
+     9 10 11 12;]
+
+firstcol = @view A[:,1]
+fiveind = findall(x->x==5, firstcol)
+A_rowwithfive = A[fiveind,:]
+
+for bin in bin_edges_10min[1:end-1]
+
+    index_10m = findall(x-> (x >= bin) & (x <= bin+Minute(10)), timecol)
+    pairlist_lite_10m = pairlist_lite[index_10m, :]
+    save_df = Dates.format(bin, "yyyymmddHHMM")
+    savename = @sprintf("pairlist_lite_10m_%s.jld2", save_df)
+    jldsave(savename, pairlist=pairlist_lite_10m)
+    mv(savename, @sprintf("data/%s",savename)) # move data file to data/ directory
+
+end
+
+using FileIO
+using JLD2
+
+
+
+index_10m = findall(x-> (x >= bin) & (x <= bin+Minute(10)), timecol)
+pairlist_lite_10m = pairlist_lite[index_10m, :]
+save_df = Dates.format(bin,"yyyymmddHHMM")
+savename = @sprintf("pairlist_lite_10m_%s.jld2",save_df)
+jldsave(savename,pairlist=pairlist_lite_10m)
+mv(savename, @sprintf("data/%s",savename)) # move data file to data/ directory
+
+
+pairlist_lite_10m = pairlist_lite[index_10m, :]
+save_df = Dates.format(bin,"yyyymmddHHMM")
+savename = @sprintf("pairlist_lite_10m_%s.jld2",save_df)
+jldsave(savename,pairlist=pairlist_lite_10m)
+mv(savename, @sprintf("data/%s",savename))
+
+save("pairlist_lite_10m_test.jld2", "pairlist_lite_10m_test", pairlist_lite[index_10m, :])
+jldsave("example_pairlist_lite_10m.jld2", pl_10m=pairlist_lite[index_10m, :])
+pl = jldopen("example_pairlist_lite_10m.jld2")
+read(pl, "pl_10m")
