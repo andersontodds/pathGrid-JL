@@ -3,9 +3,11 @@
 using MAT
 using Printf
 using BenchmarkTools
+using Profile
 using Dates
+using CompoundPeriods
 
-function getpaths(startdate; stopdate=startdate, frames=144)
+function getpaths(startdate; stopdate=startdate)
 
     # load stations.mat or stations.dat
     statfile = matopen("stations.mat")
@@ -13,13 +15,13 @@ function getpaths(startdate; stopdate=startdate, frames=144)
     close(statfile)
     # add line numbers to stationlist
     stnum = 1:1:size(stations,1)
-    stations = cat(stationlist[:,1:3], stnum; dims=2)
+    stations = cat(stations[:,1:3], stnum; dims=2)
 
     APdata = zeros(0,10)        # APfile.data has dimension N x 10
     APpower = zeros(70,0)       # APfile.power has dimension 70 x N
 
-    datestart = Date(string(startdate), "yyyymmdd")
-    datestop = Date(string(stopdate), "yyyymmdd")
+    datestart = DateTime(string(startdate), "yyyymmdd")
+    datestop = DateTime(string(stopdate), "yyyymmdd")
 
     for k = datestart:Day(1):datestop      # possibility of crossing month boundary in range requires indexing through Date rather than Int, then converting back to something parseable by @sprintf
         k_str = Dates.format(k, "yyyymmdd")
@@ -112,9 +114,17 @@ end
 
 # test function
 # NOTE 11/17: need to profile smaller parts of function.  In current form, getpaths(20170906) does not finish in ~10 minutes.
-pl_test = getpaths(20170906)
+# NOTE 11/18: JLD2 files are much larger than MAT files; e.g.:
+#   pairlist_lite_10m_201709060000.jld2       9,679 KB
+#   strokelist_lite_10m_201709060000.mat        376 KB
+# JLD2 is in HDF5 format and supports "pretty much arbitrary Julia objects".  Perhaps try csv? Also try profiling saving different file types
+# Also: when searching for times (e.g. building 10 minute pairlists), instead of doing findall(times in 10-minute window), first sort by time, then iterate down array until time window is exceeded.  This should reduce number of times array is traversed from N to 2.
 
-# profiling
+
+Juno.@profiler getpaths(20170906)
+
+## profiling
+# building pairlist
 @benchmark begin
     pairlist = zeros(0,13);
     for stID = 1:122
@@ -146,6 +156,33 @@ end
   # samples:          1
   # evals/sample:     1
 
+# saving various file formats
+# JLD2:
+  # memory estimate:  33.93 MiB
+  # allocs estimate:  991500
+  # --------------
+  # minimum time:     266.250 ms (0.00% GC)
+  # median time:      324.783 ms (6.04% GC)
+  # mean time:        325.528 ms (4.98% GC)
+  # maximum time:     363.220 ms (4.88% GC)
+  # --------------
+  # samples:          16
+  # evals/sample:     1
+testarray = rand(Float64, (30000,5))
+savename = "testfloats.jld2"
+@benchmark jldsave(savename, ta=testarray)
+#  memory estimate:  9.05 KiB
+#  allocs estimate:  103
+#  --------------
+#  minimum time:     6.583 ms (0.00% GC)
+#  median time:      8.965 ms (0.00% GC)
+#  mean time:        34.106 ms (0.00% GC)
+#  maximum time:     882.296 ms (0.00% GC)
+#  --------------
+#  samples:          160
+#  evals/sample:     1
+savename = "testfloats.csv"
+@benchmark @save savename testarray
 
 ##
 using Plots
